@@ -19,7 +19,7 @@ cmake ..
 make
 ```
 
-## 导出ONNXmox
+## 导出 ONNX 模型
 ```bash
 cd scripts
 # 默认导出是 输入 800x800x1 灰度图像，最大512个匹配对，这里可以按照需要进去修改

@@ -1,5 +1,0 @@
-/home/tk/xfeat_lightglue_trt/build/CMakeFiles/xfeat_libs.dir
-/home/tk/xfeat_lightglue_trt/build/CMakeFiles/lightglue_libs.dir
-/home/tk/xfeat_lightglue_trt/build/CMakeFiles/match_test.dir
-/home/tk/xfeat_lightglue_trt/build/CMakeFiles/edit_cache.dir
-/home/tk/xfeat_lightglue_trt/build/CMakeFiles/rebuild_cache.dir

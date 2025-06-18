@@ -1,0 +1,1 @@
+/usr/bin/c++ -fPIC  -D_GLIBCXX_USE_CXX11_ABI=1 -O3 -Wall -g -shared -Wl,-soname,liblightglue_libs.so -o liblightglue_libs.so CMakeFiles/lightglue_libs.dir/src/lightglue.cpp.o   -L/usr/local/cuda-11.4/lib64  -L/usr/local/TensorRT-8.6.1.6/lib 

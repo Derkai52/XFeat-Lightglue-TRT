@@ -1,0 +1,21 @@
+# Main params for XFeat
+max_keypoints: 512
+image_width: 800
+image_height: 800
+
+#Non-Max Suppression params
+feat_threshold: 0.05
+kernel_size: 5
+
+#SoftMax params
+softmaxTemp: 1.0
+
+
+# Main params for LightGlue
+# Maximum number of acceptable matching pairs allowed
+max_matches: 512
+
+# Matches below this value will not be accepted
+match_threshold: 0.7
+
+

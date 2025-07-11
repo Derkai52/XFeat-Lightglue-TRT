@@ -12,7 +12,7 @@ std::vector<cv::Point2f> kpts1, kpts2;
 torch::Tensor feats1, keypoints1, heatmap1, idx1;
 torch::Tensor feats2, keypoints2, heatmap2, idx2;
 
-// 这里的路径按实际情况修改
+// TODO:这里的路径按实际情况修改
 std::string image1_path = "/home/tk/xfeat_lightglue_trt/assets/ref.png";
 std::string image2_path = "/home/tk/xfeat_lightglue_trt/assets/tgt.png";
 std::string config_path = "/home/tk/xfeat_lightglue_trt/config/xfeat_lightglue.yaml";

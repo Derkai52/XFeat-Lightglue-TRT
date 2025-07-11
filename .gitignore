@@ -11,3 +11,4 @@
 *.webp
 *.tif
 *.engine
+build/

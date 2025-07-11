@@ -46,10 +46,10 @@ XFeat::XFeat(const std::string config_path, const std::string engine_path):dev(t
     rw = static_cast<float>(inputW) / static_cast<float>(_W);
 
     //Get engine bindings
-    inputIndex = engine->getBindingIndex("image");
+    inputIndex = engine->getBindingIndex("images");
     featsIndex = engine->getBindingIndex("feats");
     keypointsIndex = engine->getBindingIndex("keypoints");
-    heatmapIndex = engine->getBindingIndex("heatmap");
+    heatmapIndex = engine->getBindingIndex("heatmaps");
 
     //Sparse interpolator for post-processing outputs
     _nearest = InterpolateSparse2D("nearest");

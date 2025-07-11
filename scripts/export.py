@@ -1,149 +1,272 @@
-import os, sys
-from typing import List
-from pathlib import Path
+import types
 
-import onnx
+import argparse
 import torch
+import torch.nn.functional as F
+import onnx
 import onnxsim
-import numpy as np
-from onnxsim import simplify
 
 from modules.xfeat import XFeat
-from modules.lighterglue import LighterGlue
 
 
-ONNX_OPSET_VERSION = 17
+class CustomInstanceNorm(torch.nn.Module):
+    def __init__(self, epsilon=1e-5):
+        super(CustomInstanceNorm, self).__init__()
+        self.epsilon = epsilon
+
+    def forward(self, x):
+        mean = x.mean(dim=(2, 3), keepdim=True)
+        std = x.std(dim=(2, 3), unbiased=False, keepdim=True)
+        return (x - mean) / (std + self.epsilon)
 
 
-def sim(model_path):
-    print(f"Simlifying {model_path}")
-    onnx_model = onnx.load(model_path)
-    model_simp, check = onnxsim.simplify(onnx_model)
-    onnx.save(model_simp, model_path)
+def preprocess_tensor(self, x):
+    return x, 1.0, 1.0 # Assuming the width and height are multiples of 32, bypass preprocessing.
+
+def match_xfeat_star(self, mkpts0, feats0, sc0, mkpts1, feats1, sc1):
+    out1 = {
+        "keypoints": mkpts0,
+        "descriptors": feats0,
+        "scales": sc0,
+    }
+    out2 = {
+        "keypoints": mkpts1,
+        "descriptors": feats1,
+        "scales": sc1,
+    }
+
+    #Match batches of pairs
+    idx0_b, idx1_b = self.batch_match(out1['descriptors'], out2['descriptors'] )
+
+    #Refine coarse matches
+    match_mkpts, batch_index = self.refine_matches(out1, out2, idx0_b, idx1_b, fine_conf = 0.25)
+
+    return match_mkpts, batch_index
 
 
-def export_onnx(
-    xfeat_path=None,
-    output_folder="onnx",
-    input_shape=(1, 1, 800, 800),
-    ligherglue_n_layers=3,
-    dynamic=True,
-    dense=False,
-    top_k=512,
-):
-    dummy_input = torch.randn(input_shape, requires_grad=True)
-    print(f'img0 shape: {dummy_input.shape}')
+def parse_args():
+    parser = argparse.ArgumentParser(description="Export XFeat/Matching model to ONNX.")
+    parser.add_argument(
+        "--xfeat_only_model",
+        action="store_true",
+        help="Export only the XFeat model.",
+    )
+    parser.add_argument(
+        "--xfeat_only_model_detectAndCompute",
+        action="store_true",
+        help="Export the XFeat detectAndCompute model.",
+    )
+    parser.add_argument(
+        "--xfeat_only_model_dualscale",
+        action="store_true",
+        help="Export only the XFeat dualscale model.",
+    )
+    parser.add_argument(
+        "--xfeat_only_matching",
+        action="store_true",
+        help="Export only the matching.",
+    )
+    parser.add_argument(
+        "--xfeat_only_lighterglue",
+        action="store_true",
+        help="Export only the XFeat Lighterglue addon matching model.",
+    )
+    parser.add_argument(
+        "--split_instance_norm",
+        action="store_true",
+        help="Whether to split InstanceNorm2d into '(x - mean) / (std + epsilon)', due to some inference libraries not supporting InstanceNorm, such as OpenVINO.",
+    )
+    parser.add_argument(
+        "--height",
+        type=int,
+        default=640,
+        help="Input image height.",
+    )
+    parser.add_argument(
+        "--width",
+        type=int,
+        default=640,
+        help="Input image width.",
+    )
+    parser.add_argument(
+        "--top_k",
+        type=int,
+        default=4800,
+        help="Keep best k features.",
+    )
+    parser.add_argument(
+        "--dynamic",
+        action="store_true",
+        help="Enable dynamic axes.",
+    )
+    parser.add_argument(
+        "--export_path",
+        type=str,
+        default="./model.onnx",
+        help="Path to export ONNX model.",
+    )
+    parser.add_argument(
+        "--opset",
+        type=int,
+        default=11,
+        help="ONNX opset version.",
+    )
 
-    # Models
-    print(f'keypoints: {top_k}')
-    xfeat = XFeat(weights=xfeat_path, top_k=top_k, detection_threshold=0.05).eval()
-
-    if 1:
-        # -----------------
-        # Export Extractor
-        # -----------------
-        dynamic_axes = {
-            "keypoints": {0: "num_keypoints"},
-            "descriptors": {0: "num_keypoints", 1: "descriptor_dim"},
-        }
-
-        if dense:
-            output_path = xfeat_path.replace(".pt", "_dense.onnx")
-            xfeat.forward = xfeat.detectAndComputeDense
-            dynamic_axes.update({"scales": {0: "num_keypoints"}})
-            output_names = ["keypoints", "descriptors", "scales"]
-        else:
-            output_path = xfeat_path.replace(".pt", ".onnx")
-            xfeat.forward = xfeat.detectAndCompute
-            dynamic_axes.update({"scores": {0: "num_keypoints"}})
-            output_names = ["keypoints", "descriptors", "scores"]
-
-        # Add dynamic input
-        if dynamic:
-            dynamic_axes.update({
-                "images": {1: "channel", 2: "height", 3: "width"},
-            })
-        else:
-            print(
-                f"WARNING: Exporting without --dynamic implies that the extractor's input image size will be locked to {dummy_input.shape[-2:]}"
-            )
-            output_path = output_path.replace(
-                ".onnx",
-                f"_{top_k}_{dummy_input.shape[-2]}x{dummy_input.shape[-1]}.onnx"
-            )
-            
-        output_path = os.path.join(output_folder, os.path.basename(output_path))
-
-        # Export model
-        torch.onnx.export(
-            xfeat,
-            dummy_input,
-            output_path,
-            verbose=False,
-            do_constant_folding=True,
-            input_names=["images"],
-            output_names=output_names,
-            opset_version=ONNX_OPSET_VERSION,
-            dynamic_axes=dynamic_axes if dynamic else None,
-        )
-        sim(output_path)
-
-        # -----------------
-        # Export Matching
-        # -----------------
-
-        # Simulate keypoints, features
-        top_k = 4096 if top_k is None else top_k
-        kpts = torch.rand(1, top_k, 2, dtype=torch.float32) * 2 - 1
-        print(kpts.shape)
-        # sys.exit(0)
-        desc = torch.rand(1, top_k, 64, dtype=torch.float32)
-
-        # Dynamic input
-        dynamic_axes={
-            "kpts0":    {1: "num_keypoints0"},
-            "kpts1":    {1: "num_keypoints1"},
-            "desc0":    {1: "num_keypoints0"},
-            "desc1":    {1: "num_keypoints1"},
-            "matches":  {0: "num_matches"},
-            "scores":   {0: "num_matches"},
-        }
-
-        # if dense:
-        #     output_matching_path = os.path.join(os.path.dirname(output_path), "matching_dense.onnx")
-        #     xfeat.forward = xfeat.match_star_onnx
-        #     dynamic_axes.update({"scales0": {0: "num_kpts0"},})
-        #     input_names.append("scales0")
-        #     input_values.append(scales)
-        # else:
-        #     output_matching_path = os.path.join(os.path.dirname(output_path), "matching.onnx")
-        #     xfeat.forward = xfeat.match_onnx
-
-        matcher = LighterGlue(n_layers=ligherglue_n_layers).eval()
-        output_path = os.path.join(output_folder, f"lighterglue_L{ligherglue_n_layers}.onnx")
-        torch.onnx.export(
-            matcher,
-            (kpts, kpts, desc, desc),
-            output_path,
-            verbose=False,
-            do_constant_folding=True,
-            input_names=["kpts0", "kpts1", "desc0", "desc1"],
-            output_names=["matches", "scores"],
-            opset_version=ONNX_OPSET_VERSION,
-            dynamic_axes=None,
-            # dynamic_axes=dynamic_axes if dynamic else None,
-        )
-        sim(output_path)
-
-
+    return parser.parse_args()
 
 if __name__ == "__main__":
-    export_onnx(
-        xfeat_path="/home/tk/GNSS-Denial-UAV-Location/src/match_location/scripts/weights/xfeat.pt",
-        output_folder="onnx",
-        input_shape=(1, 1, 800, 800),
-        ligherglue_n_layers=3,
-        dynamic=True,
-        dense=False,
-        top_k=512,
-    )
+    args = parse_args()
+    if args.dynamic:
+        args.height = 640
+        args.width = 640
+    else:
+        assert args.height % 32 == 0 and args.width % 32 == 0, "Height and width must be multiples of 32."
+
+    if args.top_k > 4800:
+        print("Warning: The current maximum supported value for TopK in TensorRT is 3840, which coincidentally equals 4800 * 0.8. Please ignore this warning if TensorRT will not be used in the future.")
+
+    batch_size = 1
+    x1 = torch.randn(batch_size, 1, args.height, args.width, dtype=torch.float32, device='cpu')
+    x2 = torch.randn(batch_size, 1, args.height, args.width, dtype=torch.float32, device='cpu')
+
+    xfeat = XFeat()
+    xfeat.top_k = args.top_k
+
+    if args.split_instance_norm:
+        xfeat.net.norm = CustomInstanceNorm()
+
+    xfeat = xfeat.cpu().eval()
+    xfeat.dev = "cpu"
+
+    if not args.dynamic:
+        # Bypass preprocess_tensor
+        xfeat.preprocess_tensor = types.MethodType(preprocess_tensor, xfeat)
+
+    if args.xfeat_only_model:
+        dynamic_axes = {"images": {0: "batch", 2: "height", 3: "width"}}
+        torch.onnx.export(
+            xfeat.net,
+            (x1),
+            args.export_path,
+            verbose=False,
+            opset_version=args.opset,
+            do_constant_folding=True,
+            input_names=["images"],
+            output_names=["feats", "keypoints", "heatmaps"],
+            dynamic_axes=dynamic_axes if args.dynamic else None,
+        )
+    elif args.xfeat_only_model_detectAndCompute:
+        print("Warning: Exporting the detectAndCompute ONNX model only supports a batch size of 1.")
+        batch_size = 1
+        xfeat.forward = xfeat.detectAndCompute
+        x1 = torch.randn(batch_size, 1, args.height, args.width, dtype=torch.float32, device='cpu')
+        dynamic_axes = {"images": {2: "height", 3: "width"}}
+        torch.onnx.export(
+            xfeat,
+            (x1, args.top_k),
+            args.export_path,
+            verbose=False,
+            opset_version=args.opset,
+            do_constant_folding=True,
+            input_names=["images", "top_k"],
+            output_names=["keypoints", "scores", "descriptors"],
+            dynamic_axes=dynamic_axes if args.dynamic else None,
+        )
+    elif args.xfeat_only_model_dualscale:
+        xfeat.forward = xfeat.detectAndComputeDense
+        dynamic_axes = {"images": {0: "batch", 2: "height", 3: "width"}}
+        torch.onnx.export(
+            xfeat,
+            (x1, args.top_k),
+            args.export_path,
+            verbose=False,
+            opset_version=args.opset,
+            do_constant_folding=True,
+            input_names=["images"],
+            output_names=["mkpts", "feats", "sc"],
+            dynamic_axes=dynamic_axes if args.dynamic else None,
+        )
+    elif args.xfeat_only_matching:
+        xfeat.forward = types.MethodType(match_xfeat_star, xfeat)
+
+        mkpts0 = torch.randn(batch_size, args.top_k, 2, dtype=torch.float32, device='cpu')
+        mkpts1 = torch.randn(batch_size, args.top_k, 2, dtype=torch.float32, device='cpu')
+        feats0 = torch.randn(batch_size, args.top_k, 64, dtype=torch.float32, device='cpu')
+        feats1 = torch.randn(batch_size, args.top_k, 64, dtype=torch.float32, device='cpu')
+        sc0 = torch.randn(batch_size, args.top_k, dtype=torch.float32, device='cpu')
+        sc1 = torch.randn(batch_size, args.top_k, dtype=torch.float32, device='cpu')
+
+        dynamic_axes = {
+            "mkpts0": {0: "batch", 1: "num_keypoints_0"},
+            "feats0": {0: "batch", 1: "num_keypoints_0", 2: "descriptor_size"},
+            "sc0": {0: "batch", 1: "num_keypoints_0"},
+            "mkpts1": {0: "batch", 1: "num_keypoints_1"},
+            "feats1": {0: "batch", 1: "num_keypoints_1", 2: "descriptor_size"},
+            "sc1": {0: "batch", 1: "num_keypoints_1"},
+        }
+        torch.onnx.export(
+            xfeat,
+            (mkpts0, feats0, sc0, mkpts1, feats1, sc1),
+            args.export_path,
+            verbose=False,
+            opset_version=args.opset,
+            do_constant_folding=True,
+            input_names=["mkpts0", "feats0", "sc0", "mkpts1", "feats1", "sc1"],
+            output_names=["matches", "batch_indexes"],
+            dynamic_axes=dynamic_axes if args.dynamic else None,
+        )
+    elif args.xfeat_only_lighterglue:
+        if args.opset < 14:
+            print(f"Lighterglue requires at least opset 14, bumping from {args.opset}")
+            args.opset = 14
+        mkpts0 = torch.randn(1, args.top_k, 2, dtype=torch.float32, device='cpu')
+        mkpts1 = torch.randn(1, args.top_k, 2, dtype=torch.float32, device='cpu')
+        feats0 = torch.randn(1, args.top_k, 64, dtype=torch.float32, device='cpu')
+        feats1 = torch.randn(1, args.top_k, 64, dtype=torch.float32, device='cpu')
+        # Lighterglue requires normalized keypoints; the model will do this for you
+        # but requires passing in the image size
+        image0_size = torch.randn(2, dtype=torch.float32, device='cpu')
+        image1_size = torch.randn(2, dtype=torch.float32, device='cpu')
+        dynamic_axes = {
+            "mkpts0": {1: "num_keypoints_0"},
+            "feats0": {1: "num_keypoints_0"},
+            "mkpts1": {1: "num_keypoints_1"},
+            "feats1": {1: "num_keypoints_1"},
+        }
+        from modules.lighterglueonnx import LighterGlueONNX
+        lighterglue = LighterGlueONNX()
+        lighterglue = lighterglue.eval().cpu()
+        torch.onnx.export(
+            lighterglue,
+            (mkpts0, feats0, image0_size, mkpts1, feats1, image1_size),
+            args.export_path,
+            verbose=False,
+            opset_version=args.opset,
+            do_constant_folding=True,
+            input_names=["mkpts0", "feats0", "image0_size", "mkpts1", "feats1", "image1_size"],
+            output_names=["matches", "scores"],
+            dynamic_axes=dynamic_axes if args.dynamic else None,
+        )
+    else:
+        xfeat.forward = xfeat.match_xfeat_star
+        dynamic_axes = {"images0": {0: "batch", 2: "height", 3: "width"}, "images1": {0: "batch", 2: "height", 3: "width"}}
+        torch.onnx.export(
+            xfeat,
+            (x1, x2),
+            args.export_path,
+            verbose=False,
+            opset_version=args.opset,
+            do_constant_folding=True,
+            input_names=["images0", "images1"],
+            output_names=["matches", "batch_indexes"],
+            dynamic_axes=dynamic_axes if args.dynamic else None,
+        )
+
+    model_onnx = onnx.load(args.export_path)  # load onnx model
+    onnx.checker.check_model(model_onnx)  # check onnx model
+
+    model_onnx, check = onnxsim.simplify(model_onnx)
+    assert check, "assert check failed"
+    onnx.save(model_onnx, args.export_path)
+
+    print(f"Model exported to {args.export_path}")

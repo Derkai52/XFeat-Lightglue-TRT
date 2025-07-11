@@ -34,10 +34,10 @@ python3 scripts/export.py --xfeat_only_lighterglue --height 800 --height 800 --t
 ```bash
 # 如果需要INT8 推理的话，可以在后面添加 --int8 参数，默认是FP32推理
 # 转为 Xfeat.engine 文件
-/usr/src/tensorrt/bin/trtexec --onnx=/home/emnavi/GNSS-Denial-UAV-Location/src/match_location/weights/xfeat_1_800_800.onnx --saveEngine=/home/tk/GNSS-Denial-UAV-Location/src/match_location/weights/xfeat_1_800_800.engine
+/usr/src/tensorrt/bin/trtexec --onnx=/home/xxx/xfeat_lightglue_trt/weights/xfeat_1_800_800.onnx --saveEngine=/home/xxx/xfeat_lightglue_trt/weights/xfeat_1_800_800.engine
 
 # 转为 Lightglue.engine 文件
-/usr/src/tensorrt/bin/trtexec --onnx=/home/emnavi/GNSS-Denial-UAV-Location/src/match_location/weights/lightglue_L6_1_800_800.onnx --saveEngine=/home/emnavi/GNSS-Denial-UAV-Location/src/match_location/weights/lightglue_L6_1_800_800.engine
+/usr/src/tensorrt/bin/trtexec --onnx=/home/xxx/xfeat_lightglue_trt/weights/lightglue_L6_1_800_800.onnx --saveEngine=/home/xxx/xfeat_lightglue_trt/weights/lightglue_L6_1_800_800.engine
 ```
 
 ## Demo 演示
